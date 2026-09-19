@@ -47,7 +47,7 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> List[str]:
-        if self.CORS_ORIGINS == "*":
+        if self.CORS_ORIGINS.strip() == "*":
             return ["*"]
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
@@ -61,5 +61,7 @@ if len(settings.JWT_SECRET) < 32 or settings.JWT_SECRET.startswith("super-secret
 
 if settings.is_production and settings.CORS_ORIGINS.strip() == "*":
     raise RuntimeError(
-        "En producción CORS_ORIGINS no puede ser '*'. Ejemplo: CORS_ORIGINS=https://tudominio.com,https://www.tudominio.com"
+        "En producción CORS_ORIGINS no puede ser '*'. "
+        "Si la web y la API van en el mismo dominio (Nginx del frontend), déjalo vacío: CORS_ORIGINS= . "
+        "Si la web está en otro dominio: CORS_ORIGINS=https://tudominio.com,https://www.tudominio.com"
     )

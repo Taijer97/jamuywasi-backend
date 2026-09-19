@@ -1,0 +1,19 @@
+# Nunca meter secretos en la imagen ni en el contexto de build
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.db
+.git/
+.pytest_cache/
+tests/
+src/
+uv.lock
+run_prod.ps1
+README.md

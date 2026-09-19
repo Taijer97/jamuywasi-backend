@@ -125,9 +125,9 @@ class PromotionalBanner(Base):
     __tablename__ = "promotional_banners"
 
     id = Column(String(50), primary_key=True, default=lambda: generate_uuid("banner"))
-    title = Column(String(200), nullable=False)
+    title = Column(String(200), nullable=False, default="")
     subtitle = Column(String(255), default="")
-    badge = Column(String(100), default="OFERTA")
+    badge = Column(String(100), default="")
     image_url = Column(String(500), nullable=False)
     product_id = Column(String(50), nullable=True)
     store_id = Column(String(50), nullable=True)

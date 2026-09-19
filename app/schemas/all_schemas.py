@@ -275,9 +275,10 @@ class OrderOut(BaseModel):
 
 # --- Banner ---
 class PromotionalBannerBase(BaseModel):
-    title: str
+    # Textos opcionales: vacíos por defecto (el anuncio puede ser solo una imagen)
+    title: Optional[str] = ""
     subtitle: Optional[str] = ""
-    badge: Optional[str] = "OFERTA"
+    badge: Optional[str] = ""
     image_url: str
     product_id: Optional[str] = None
     store_id: Optional[str] = None

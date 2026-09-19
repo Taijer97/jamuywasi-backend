@@ -46,6 +46,18 @@ def calculate_renewal_period_end(current_end: Optional[datetime], days: int) -> 
     new_end = now_utc + timedelta(days=days)
     return new_end, 0
 
+async def get_admin_whatsapp_display(db: AsyncSession) -> str:
+    """Número de WhatsApp del SuperAdmin configurado en SuperAdmin > Cobros & QR Yape."""
+    setting = (await db.execute(select(SystemSetting).where(SystemSetting.key == "yape_config"))).scalar_one_or_none()
+    val = (setting.value if setting and setting.value else {}) or {}
+    formatted = str(val.get("phone_formatted") or "").strip()
+    if formatted:
+        return formatted
+    digits = "".join(ch for ch in str(val.get("phone") or "925763903") if ch.isdigit())
+    wa = f"51{digits}" if len(digits) == 9 else digits
+    return f"+{wa[:2]} {wa[2:5]} {wa[5:8]} {wa[8:]}" if len(wa) == 11 else f"+{wa}"
+
+
 async def generate_invoice_number(db: AsyncSession) -> str:
     from sqlalchemy import func
     year = datetime.now(timezone.utc).year
@@ -207,7 +219,7 @@ async def verify_yape_payment(
     if attempts >= 3:
         return YapeVerifyResponse(
             success=False,
-            message="Has alcanzado el límite máximo de 3 intentos automáticos. Por favor, envía tu comprobante directamente a nuestro WhatsApp (+51 925 763 903) para activación manual.",
+            message=f"Has alcanzado el límite máximo de 3 intentos automáticos. Por favor, envía tu comprobante directamente a nuestro WhatsApp ({await get_admin_whatsapp_display(db)}) para activación manual.",
             activated=False,
             attempts=attempts,
             remaining_attempts=0,
@@ -399,7 +411,7 @@ async def verify_yape_payment(
         if must_whatsapp:
             user_msg = (
                 f"{err_detail} Has agotado los 3 intentos permitidos. "
-                "Por favor, envía tu comprobante por WhatsApp a +51 925 763 903 para que nuestro equipo active tu tienda de inmediato."
+                f"Por favor, envía tu comprobante por WhatsApp a {await get_admin_whatsapp_display(db)} para que nuestro equipo active tu tienda de inmediato."
             )
         else:
             user_msg = (

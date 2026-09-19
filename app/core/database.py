@@ -12,7 +12,9 @@ engine = create_async_engine(
     max_overflow=50,
     pool_timeout=30.0,
     pool_recycle=1800,
-    pool_pre_ping=False,
+    pool_pre_ping=True,   # descarta conexiones cortadas por MySQL/red en vez de fallar la petición
+    # si MySQL no responde, falla en 10 s en vez de colgarse
+    connect_args={"connect_timeout": 10} if "mysql" in settings.DATABASE_URL else {},
 )
 
 AsyncSessionLocal = async_sessionmaker(
