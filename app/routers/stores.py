@@ -6,10 +6,10 @@ from typing import List, Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, delete
 from app.core.database import get_db, AsyncSessionLocal
 from app.core.cache import catalog_cache
-from app.models.all_models import Store, Product, User
+from app.models.all_models import Store, Product, User, PromotionalBanner, Notification
 from app.schemas.all_schemas import StoreOut, StoreCreate, StoreUpdate
 from app.core.deps import get_required_user, get_superadmin_user, get_current_user
 from app.core.websocket_manager import ws_manager
@@ -258,6 +258,17 @@ async def delete_store(
     store = (await db.execute(stmt)).scalar_one_or_none()
     if not store:
         raise HTTPException(status_code=404, detail="Tienda no encontrada")
+
+    # Limpiar banners asociados a la tienda
+    await db.execute(delete(PromotionalBanner).where(PromotionalBanner.store_id == store_id))
+    # Limpiar notificaciones asociadas a la tienda
+    await db.execute(delete(Notification).where(Notification.store_id == store_id))
+    
+    # Desvincular usuarios que tengan esta tienda asignada como su store_id
+    user_stmt = select(User).where(User.store_id == store_id)
+    linked_users = (await db.execute(user_stmt)).scalars().all()
+    for u in linked_users:
+        u.store_id = None
 
     await db.delete(store)
     await db.commit()

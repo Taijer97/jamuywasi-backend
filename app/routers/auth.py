@@ -3,10 +3,10 @@ from typing import List, Dict, Any
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, delete
 from app.core.database import get_db
 from app.core.security import hash_password, verify_password, create_access_token, password_needs_rehash
-from app.models.all_models import User, Store, SystemSetting
+from app.models.all_models import User, Store, SystemSetting, PromotionalBanner, Notification
 from app.schemas.all_schemas import (
     UserLogin, UserRegister, TokenResponse, UserOut,
     UserProfileUpdate, UserAdminUpdate,
@@ -822,6 +822,19 @@ async def delete_user(
                 detail="Solo se puede eliminar un usuario si su plan de suscripción está vencido o cancelado."
             )
     
+    # Si el usuario es comerciante, eliminar completamente sus tiendas asociadas y registros vinculados
+    if user.role == "merchant":
+        stores_stmt = select(Store).where(or_(Store.owner_id == user.id, Store.id == user.store_id))
+        user_stores = (await db.execute(stores_stmt)).scalars().all()
+        for s in user_stores:
+            await db.execute(delete(PromotionalBanner).where(PromotionalBanner.store_id == s.id))
+            await db.execute(delete(Notification).where(Notification.store_id == s.id))
+            await db.delete(s)
+            await ws_manager.broadcast({
+                "type": "STORE_DELETED",
+                "data": {"id": s.id}
+            })
+
     await db.delete(user)
     await db.commit()
     catalog_cache.invalidate()  # aprobar/suspender/eliminar cambia qué tiendas son públicas

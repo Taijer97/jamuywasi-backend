@@ -4,6 +4,17 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 from app.core.config import settings
 
+# aiomysql's AsyncAdapt_aiomysql_connection.ping requires a 'reconnect' positional argument,
+# but SQLAlchemy's pool_pre_ping calls ping() with no arguments.
+try:
+    from sqlalchemy.dialects.mysql.aiomysql import AsyncAdapt_aiomysql_connection
+    _orig_ping = AsyncAdapt_aiomysql_connection.ping
+    def _patched_ping(self, reconnect=False):
+        return _orig_ping(self, False)
+    AsyncAdapt_aiomysql_connection.ping = _patched_ping
+except Exception:
+    pass
+
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=False,
