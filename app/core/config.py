@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     MINIO_BUCKET: str = "atalaya-store"
     MINIO_SECURE: bool = False
     MINIO_PUBLIC_URL_PREFIX: str = ""
+
+    # Dirección pública de la web (para vistas previas de WhatsApp/Facebook). Ej: https://store.jamuywasi.com
+    PUBLIC_BASE_URL: str = ""
     
     # Obligatorio en .env. Debe ser largo y aleatorio (mínimo 32 caracteres).
     JWT_SECRET: str

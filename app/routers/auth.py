@@ -16,6 +16,7 @@ from app.schemas.all_schemas import (
 from app.core.deps import get_required_user, get_superadmin_user
 from app.core.websocket_manager import ws_manager
 from app.core.rate_limit import rate_limit
+from app.core.notifications import notify
 from app.core.cache import catalog_cache
 import re
 
@@ -184,6 +185,10 @@ async def register(data: UserRegister, db: AsyncSession = Depends(get_db)):
             "type": "STORE_CREATED",
             "data": store_dict
         })
+        await notify([], "APPROVAL_PENDING", "Nueva tienda por aprobar",
+                     f"{new_store.name} · {new_user.name} ({new_user.phone or new_user.email}) espera tu autorización.",
+                     {"view": "superadmin", "adminTab": "users", "targetId": new_user.id}, new_store.id,
+                     to_superadmins=True)
 
     token = create_access_token(subject=new_user.id)
     return {
@@ -397,6 +402,10 @@ async def request_forgot_pin(data: ForgotPinRequest, db: AsyncSession = Depends(
             "message": f"Solicitud de restablecimiento de PIN: {user.name} ({user.dni or user.email})"
         }
     })
+    await notify([], "PIN_RESET_REQUESTED", "Solicitud para reiniciar PIN",
+                 f"{user.name} ({user.dni or user.email}) · {store_name} no puede ingresar a su cuenta.",
+                 {"view": "superadmin", "adminTab": "users", "targetId": user.id}, user.store_id,
+                 to_superadmins=True)
 
     return ForgotPinResponse(
         success=True,
@@ -421,6 +430,12 @@ async def admin_reset_pin_default(
     user = await db.get(User, data.user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado.")
+    # Solo se restablece si el propio usuario lo pidió ("Olvidé mi PIN" o 3 intentos fallidos)
+    if not user.pin_reset_requested:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Este usuario no ha solicitado restablecer su PIN. Pídele que use \"¿Olvidaste tu PIN?\" en el inicio de sesión.",
+        )
 
     user.hashed_password = hash_password("000000")
     user.failed_login_attempts = 0
@@ -712,6 +727,7 @@ async def update_user_status(
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     
     new_status = status_data.get("status")
+    previous_status = user.status
     if new_status:
         user.status = new_status
         if user.store_id:
@@ -725,6 +741,15 @@ async def update_user_status(
             "type": "USER_UPDATED",
             "data": serialize_user_for_ws(user)
         })
+        if user.role == "merchant" and previous_status != new_status:
+            if new_status == "active":
+                await notify([user.id], "ACCOUNT_APPROVED", "¡Tu tienda fue aprobada!",
+                             "Ya está publicada y puede recibir pedidos por WhatsApp.",
+                             {"view": "merchant", "tab": "overview"}, user.store_id)
+            elif new_status == "suspended":
+                await notify([user.id], "ACCOUNT_SUSPENDED", "Tu cuenta fue suspendida",
+                             "Tu tienda no se muestra al público. Comunícate con el administrador.",
+                             {"view": "merchant", "tab": "subscription"}, user.store_id)
     return {"message": "Estado actualizado exitosamente", "user_id": user.id, "status": user.status}
 
 @router.put("/users/{user_id}/role")

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import uuid
-from sqlalchemy import Column, String, Text, Boolean, Integer, Float, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, String, Text, Boolean, Integer, Float, DateTime, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -106,6 +106,7 @@ class Order(Base):
     order_number = Column(String(50), unique=True, index=True, nullable=False)
     store_id = Column(String(50), ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     customer_name = Column(String(120), nullable=False)
+    customer_dni = Column(String(12), nullable=True)   # DNI (8) o carné de extranjería (9)
     customer_phone = Column(String(50), nullable=False)
     customer_address = Column(String(255), default="")
     notes = Column(Text, default="")
@@ -179,3 +180,21 @@ class SubscriptionInvoice(Base):
 
     user = relationship("User", back_populates="invoices")
     store = relationship("Store", back_populates="invoices")
+
+
+class Notification(Base):
+    """Notificación para un usuario (comerciante o superadmin). Una fila por destinatario."""
+    __tablename__ = "notifications"
+    __table_args__ = (UniqueConstraint("user_id", "dedupe_key", name="uq_notification_user_dedupe"),)
+
+    id = Column(String(50), primary_key=True, default=lambda: generate_uuid("ntf"))
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    store_id = Column(String(50), nullable=True)
+    type = Column(String(40), nullable=False)          # ORDER_NEW, PLAN_EXPIRING, PLAN_EXPIRED, APPROVAL_PENDING, ...
+    title = Column(String(160), nullable=False)
+    message = Column(String(400), default="")
+    link = Column(JSON, default=dict)                   # {"view": "merchant", "tab": "orders", "targetId": "ord_..."}
+    dedupe_key = Column(String(120), nullable=True)     # evita repetir recordatorios (p. ej. plan por vencer)
+    is_read = Column(Boolean, default=False, index=True)
+    read_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

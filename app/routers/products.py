@@ -1,14 +1,21 @@
 from typing import List, Optional
 from datetime import datetime, timezone
+import json
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import Response
+from app.core.utc_json import mark_utc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func, or_, and_, desc, asc
-from app.core.database import get_db
+from app.core.database import get_db, AsyncSessionLocal
 from app.core.cache import catalog_cache
 from app.models.all_models import Product, Store, User
 from app.schemas.all_schemas import ProductOut, ProductCreate, ProductUpdate
 from app.core.deps import get_required_user
 from app.core.websocket_manager import ws_manager
+
+# Productos por tienda según el plan (igual que SAAS_PLANS del frontend)
+PLAN_MAX_PRODUCTS = {"starter": 20, "pro": 150, "business": 9999}
 
 router = APIRouter(prefix="/products", tags=["Productos & Catálogo"])
 
@@ -26,15 +33,24 @@ async def list_products(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db)
 ):
-    """Catálogo multitienda con soporte de búsqueda, filtros avanzados y ordenamiento con caché en memoria"""
+    """Catálogo multitienda con búsqueda, filtros y ordenamiento. La vista por defecto se cachea."""
+    params = dict(search=search, store_ids=store_ids, category=category, min_price=min_price, max_price=max_price,
+                  only_in_stock=only_in_stock, only_on_sale=only_on_sale, sort_by=sort_by, limit=limit, offset=offset)
     is_default_query = not search and not store_ids and not category and min_price is None and max_price is None and not only_in_stock and not only_on_sale and offset == 0
-    cache_key = f"products:default:{sort_by}:{limit}" if is_default_query else None
+    if is_default_query:
+        async def compute() -> bytes:
+            # Sesión propia: el cálculo puede terminar después de esta petición (refresco en segundo plano)
+            async with AsyncSessionLocal() as own_db:
+                items = await _query_products(own_db, **params)
+            # Se guarda el JSON ya armado: las siguientes visitas no vuelven a validar ni convertir 100 productos
+            return json.dumps(mark_utc(jsonable_encoder(items)), ensure_ascii=False, separators=(",", ":")).encode()
+        body = await catalog_cache.get_or_compute(f"products:default:{sort_by}:{limit}", compute, 30)
+        return Response(content=body, media_type="application/json")
+    return await _query_products(db, **params)
 
-    if cache_key:
-        cached = catalog_cache.get(cache_key)
-        if cached is not None:
-            return cached
 
+async def _query_products(db: AsyncSession, *, search, store_ids, category, min_price, max_price,
+                          only_in_stock, only_on_sale, sort_by, limit, offset) -> List[ProductOut]:
     stmt = select(Product, Store.name.label("store_name"), Store.logo.label("store_logo"))\
         .join(Store, Store.id == Product.store_id)\
         .where(Store.is_active == True)
@@ -108,10 +124,8 @@ async def list_products(
         p_dict["store_logo"] = s_logo
         products_out.append(ProductOut(**p_dict))
 
-    if cache_key:
-        catalog_cache.set(cache_key, products_out, ttl_seconds=30)
-
     return products_out
+
 
 @router.get("/my-products", response_model=List[ProductOut])
 async def get_my_products(
@@ -173,13 +187,31 @@ async def create_product(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_required_user)
 ):
-    # Verify store existence and ownership
-    stmt_st = select(Store).where(Store.id == data.store_id)
+    # Verify store existence and ownership.
+    # FOR UPDATE bloquea la fila de la tienda hasta el commit: si el mismo comerciante crea varios
+    # productos a la vez, se procesan de a uno y el límite del plan no se puede saltar.
+    stmt_st = select(Store).where(Store.id == data.store_id).with_for_update()
     target_st = (await db.execute(stmt_st)).scalar_one_or_none()
     if not target_st:
         raise HTTPException(status_code=404, detail="Tienda no encontrada.")
     if current_user.role != "superadmin" and current_user.store_id != data.store_id and target_st.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="No puedes crear productos en otra tienda.")
+
+    # Límite de productos del plan (antes solo se mostraba en pantalla, no se validaba)
+    if current_user.role != "superadmin":
+        owner = await db.get(User, target_st.owner_id) if target_st.owner_id else current_user
+        plan_id = ((owner or current_user).subscription_plan or "starter").lower()
+        max_products = PLAN_MAX_PRODUCTS.get(plan_id, PLAN_MAX_PRODUCTS["starter"])
+        # Lectura con bloqueo: lee el dato más reciente (una lectura normal usaría la "foto" de la
+        # transacción, tomada antes de que otras peticiones simultáneas guardaran sus productos)
+        current = (await db.execute(
+            select(func.count(Product.id)).where(Product.store_id == target_st.id).with_for_update(read=True)
+        )).scalar_one()
+        if current >= max_products:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Llegaste al límite de {max_products} productos de tu plan. Mejora tu plan para agregar más.",
+            )
 
     slug = (data.slug or data.name).lower().strip().replace(" ", "-")
     new_product = Product(
@@ -199,19 +231,15 @@ async def create_product(
         variants=data.variants or [],
         combinations=data.combinations or [],
     )
+    s_name, s_logo = target_st.name or "", target_st.logo or ""  # ya leídos (evita otra consulta)
     db.add(new_product)
     await db.commit()
     await db.refresh(new_product)
 
-    stmt = select(Store.name, Store.logo).where(Store.id == new_product.store_id)
-    s_res = (await db.execute(stmt)).first()
-    s_name = s_res[0] if s_res else ""
-    s_logo = s_res[1] if s_res else ""
-
     p_dict = {c.name: getattr(new_product, c.name) for c in new_product.__table__.columns}
     p_dict["store_name"] = s_name
     p_dict["store_logo"] = s_logo
-    catalog_cache.invalidate()
+    catalog_cache.mark_stale()  # catálogo y conteos de tiendas: se sirve la copia mientras se recalcula
     out = ProductOut(**p_dict)
     await ws_manager.broadcast({
         "type": "PRODUCT_CREATED",
@@ -251,7 +279,7 @@ async def update_product(
     p_dict = {c.name: getattr(product, c.name) for c in product.__table__.columns}
     p_dict["store_name"] = s_name
     p_dict["store_logo"] = s_logo
-    catalog_cache.invalidate()
+    catalog_cache.mark_stale()  # catálogo y conteos de tiendas: se sirve la copia mientras se recalcula
     out = ProductOut(**p_dict)
     await ws_manager.broadcast({
         "type": "PRODUCT_UPDATED",
@@ -278,7 +306,7 @@ async def delete_product(
     prod_store_id = product.store_id
     await db.delete(product)
     await db.commit()
-    catalog_cache.invalidate()
+    catalog_cache.mark_stale()  # catálogo y conteos de tiendas: se sirve la copia mientras se recalcula
     await ws_manager.broadcast({
         "type": "PRODUCT_DELETED",
         "data": {"id": product_id, "store_id": prod_store_id}

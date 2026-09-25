@@ -7,6 +7,7 @@ from app.models.all_models import Order, Store, User
 from app.schemas.all_schemas import OrderCreate, OrderOut
 from app.core.deps import get_required_user
 from app.core.websocket_manager import ws_manager
+from app.core.notifications import notify, store_owner_ids
 from app.core.rate_limit import rate_limit
 from app.core.order_pricing import effective_unit_price, is_combination_available
 from app.models.all_models import Product
@@ -99,6 +100,7 @@ async def create_order(data: OrderCreate, db: AsyncSession = Depends(get_db)):
         order_number=order_num,
         store_id=data.store_id,
         customer_name=data.customer_name,
+        customer_dni=data.customer_dni,
         customer_phone=data.customer_phone,
         customer_address=data.customer_address or "",
         notes=notes,
@@ -119,6 +121,13 @@ async def create_order(data: OrderCreate, db: AsyncSession = Depends(get_db)):
         "type": "ORDER_CREATED",
         "data": out.dict()
     })
+    # Notificación para el/los dueños de la tienda
+    symbol = store.currency_symbol or "S/"
+    owners = await store_owner_ids(db, store.id)
+    units = sum(int(i["quantity"]) for i in clean_items)
+    await notify(owners, "ORDER_NEW", f"Nuevo pedido {new_order.order_number}",
+                 f"{new_order.customer_name} · {symbol} {new_order.total:.2f} · {units} {'unidad' if units == 1 else 'unidades'}",
+                 {"view": "merchant", "tab": "orders", "targetId": new_order.id}, store.id)
     return new_order
 
 @router.get("", response_model=List[OrderOut])

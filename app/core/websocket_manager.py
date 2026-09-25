@@ -1,8 +1,11 @@
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Set
 from fastapi import WebSocket
 from fastapi.encoders import jsonable_encoder
+from app.core.utc_json import mark_utc
+from app.core import redis_bus
 
 logger = logging.getLogger("jamuywasi.websockets")
 
@@ -57,28 +60,76 @@ class WebSocketManager:
             logger.info(f"Cliente WebSocket desconectado. Total activos: {len(self.active_connections)}")
 
     async def broadcast(self, message: dict):
-        """Envía el evento solo a los clientes autorizados a verlo."""
+        """Envía el evento a los clientes autorizados, en TODOS los procesos del backend (vía Redis)."""
+        payload = mark_utc(jsonable_encoder(message))
+        if await redis_bus.publish("ws", {"kind": "broadcast", "payload": payload}):
+            return  # cada proceso (incluido este) lo entrega a sus propios clientes al recibirlo
+        await self._deliver_broadcast(payload)
+
+    async def _deliver_broadcast(self, payload: dict):
+        """Entrega a los clientes conectados a ESTE proceso."""
         if not self.active_connections:
             return
-
-        payload = jsonable_encoder(message)
         msg_type = payload.get("type", "")
         data = payload.get("data") or {}
         if not isinstance(data, dict):
             data = {}
 
-        dead = []
-        for connection, ctx in list(self.active_connections.items()):
-            if not _can_receive(ctx, msg_type, data):
-                continue
+        targets = [c for c, ctx in list(self.active_connections.items()) if _can_receive(ctx, msg_type, data)]
+        if not targets:
+            return
+
+        async def _send(connection: WebSocket):
+            # Envío en paralelo y con tiempo máximo: un cliente con mala señal no retrasa a los demás
             try:
-                await connection.send_json(payload)
+                await asyncio.wait_for(connection.send_json(payload), timeout=5)
+                return None
             except Exception as e:
                 logger.warning(f"Error al enviar mensaje a cliente WebSocket, desconectando: {e}")
-                dead.append(connection)
+                return connection
 
-        for d in dead:
-            self.disconnect(d)
+        results = await asyncio.gather(*(_send(c) for c in targets))
+        for dead in results:
+            if dead is not None:
+                self.disconnect(dead)
+                try:
+                    await dead.close()
+                except Exception:
+                    pass
+
+
+    async def send_to_users(self, user_ids, message: dict):
+        """Envía un evento solo a las conexiones de esos usuarios (p. ej. una notificación)."""
+        ids = [str(u) for u in set(user_ids) if u]
+        if not ids:
+            return
+        payload = mark_utc(jsonable_encoder(message))
+        if await redis_bus.publish("ws", {"kind": "users", "ids": ids, "payload": payload}):
+            return
+        await self._deliver_to_users(set(ids), payload)
+
+    async def _deliver_to_users(self, ids: set, payload: dict):
+        if not ids or not self.active_connections:
+            return
+        targets = [c for c, ctx in list(self.active_connections.items()) if ctx.user_id in ids]
+
+        async def _send(connection: WebSocket):
+            try:
+                await asyncio.wait_for(connection.send_json(payload), timeout=5)
+            except Exception:
+                self.disconnect(connection)
+
+        await asyncio.gather(*(_send(c) for c in targets))
 
 
 ws_manager = WebSocketManager()
+
+
+async def _on_redis_ws(msg: dict) -> None:
+    if msg.get("kind") == "broadcast":
+        await ws_manager._deliver_broadcast(msg.get("payload") or {})
+    elif msg.get("kind") == "users":
+        await ws_manager._deliver_to_users(set(msg.get("ids") or []), msg.get("payload") or {})
+
+
+redis_bus.subscribe("ws", _on_redis_ws)

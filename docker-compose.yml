@@ -20,7 +20,11 @@ services:
       - .env
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-production}
-      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
+      # Procesos del backend. Con REDIS_URL en .env se pueden usar 2 o más (uno por núcleo del VPS);
+      # sin Redis déjalo en 1.
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      # Subida directa navegador -> MinIO (requiere el Nginx del frontend con /s3-upload)
+      DIRECT_UPLOADS: ${DIRECT_UPLOADS:-true}
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
     # Solo accesible desde el propio servidor (127.0.0.1). El público entra por el
     # Nginx del frontend, que se conecta por la red interna jamuywasi_net.
@@ -42,7 +46,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 768M   # 2 procesos × ~200 MB con margen
 
 networks:
   jamuywasi_net:

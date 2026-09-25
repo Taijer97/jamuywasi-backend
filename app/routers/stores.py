@@ -1,9 +1,13 @@
+import json
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import Response
+from app.core.utc_json import mark_utc
 from typing import List, Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
-from app.core.database import get_db
+from app.core.database import get_db, AsyncSessionLocal
 from app.core.cache import catalog_cache
 from app.models.all_models import Store, Product, User
 from app.schemas.all_schemas import StoreOut, StoreCreate, StoreUpdate
@@ -27,12 +31,19 @@ async def list_stores(
     is_superadmin = current_user is not None and current_user.role == "superadmin"
     is_public = not (is_superadmin and include_all)
     
-    cache_key = "stores:public_list"
     if is_public:
-        cached = catalog_cache.get(cache_key)
-        if cached is not None:
-            return cached
+        async def compute() -> bytes:
+            # Sesión propia (puede terminar después de esta petición) y JSON ya armado:
+            # las visitas siguientes no vuelven a convertir cientos de tiendas.
+            async with AsyncSessionLocal() as own_db:
+                items = await _query_stores(own_db, True)
+            return json.dumps(mark_utc(jsonable_encoder(items)), ensure_ascii=False, separators=(",", ":")).encode()
+        body = await catalog_cache.get_or_compute("stores:public_list", compute, 30)
+        return Response(content=body, media_type="application/json")
+    return await _query_stores(db, False)
 
+
+async def _query_stores(db: AsyncSession, is_public: bool) -> List[StoreOut]:
     stmt = select(
         Store,
         func.count(Product.id).label("product_count")
@@ -66,10 +77,8 @@ async def list_stores(
         store_dict["products_count"] = count or 0
         stores_out.append(StoreOut(**store_dict))
 
-    if is_public:
-        catalog_cache.set(cache_key, stores_out, ttl_seconds=30)
-
     return stores_out
+
 
 PLAN_STORE_LIMITS = {
     "starter": 1,

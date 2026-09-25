@@ -1,6 +1,7 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field
+import re
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 # --- Auth ---
 class UserLogin(BaseModel):
@@ -239,6 +240,7 @@ class OrderCreate(BaseModel):
     store_id: str = Field(..., max_length=50)
     order_number: Optional[str] = Field(None, max_length=20)  # número mostrado en el mensaje de WhatsApp
     customer_name: str = Field(..., min_length=1, max_length=120)
+    customer_dni: str = Field(..., max_length=12)
     customer_phone: str = Field(..., min_length=1, max_length=50)
     customer_address: Optional[str] = Field("", max_length=255)
     notes: Optional[str] = Field("", max_length=2000)
@@ -252,11 +254,43 @@ class OrderCreate(BaseModel):
     total: float = 0.0
     whatsapp_message_sent: Optional[str] = Field("", max_length=8000)
 
+    # --- Validaciones de seguridad del checkout (no confiar solo en el navegador) ---
+    @field_validator("customer_dni")
+    @classmethod
+    def _dni(cls, v: str) -> str:
+        v = re.sub(r"\s+", "", v or "")
+        if not re.fullmatch(r"\d{8,9}", v):
+            raise ValueError("El DNI debe tener 8 dígitos (o 9 si es carné de extranjería).")
+        return v
+
+    @field_validator("customer_name")
+    @classmethod
+    def _full_name(cls, v: str) -> str:
+        v = re.sub(r"\s+", " ", (v or "").strip())
+        words = v.split(" ")
+        if len(words) < 3 or any(len(w) < 2 for w in words):
+            raise ValueError("Escribe tu nombre y tus dos apellidos (paterno y materno).")
+        if not re.fullmatch(r"[A-Za-zÀ-ÿÑñ' .-]+", v):
+            raise ValueError("El nombre solo puede contener letras.")
+        return v
+
+    @field_validator("customer_phone")
+    @classmethod
+    def _phone(cls, v: str) -> str:
+        digits = re.sub(r"\D", "", v or "")
+        if digits.startswith("51"):   # Perú: +51 y celular de 9 dígitos que empieza con 9
+            if len(digits) != 11 or digits[2] != "9":
+                raise ValueError("El celular peruano debe empezar con 9 y tener 9 dígitos.")
+        elif not (8 <= len(digits) <= 15):
+            raise ValueError("Ingresa un número de WhatsApp válido con código de país.")
+        return "+" + digits
+
 class OrderOut(BaseModel):
     id: str
     order_number: str
     store_id: str
     customer_name: str
+    customer_dni: Optional[str] = None
     customer_phone: str
     customer_address: str
     notes: str

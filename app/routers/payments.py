@@ -10,6 +10,7 @@ from app.core.cache import catalog_cache
 from app.core.deps import get_required_user, get_superadmin_user
 from app.core.websocket_manager import ws_manager
 from app.core.rate_limit import rate_limit
+from app.core.notifications import notify
 from app.models.all_models import User, Store, PromoCode, SystemSetting, SubscriptionInvoice
 from app.schemas.all_schemas import (
     YapeVerifyRequest,
@@ -180,6 +181,15 @@ async def verify_yape_payment(
                 "user_name": current_user.name
             }
         })
+        # Notificaciones: al comerciante (plan activo) y a los superadmins (pago recibido)
+        _end = new_period_end.strftime("%d/%m/%Y")
+        await notify([current_user.id], "PLAN_ACTIVATED", f"Plan {p_name} activo",
+                     f"Tu plan está activo hasta el {_end}. Comprobante {inv.invoice_number}.",
+                     {"view": "merchant", "tab": "subscription"}, current_user.store_id)
+        await notify([], "PAYMENT_RECEIVED", f"Pago recibido: {current_user.name}",
+                     f"Plan {p_name} · S/ {float(final_amount):.2f} · vigente hasta el {_end}.",
+                     {"view": "superadmin", "adminTab": "users", "targetId": current_user.id},
+                     current_user.store_id, to_superadmins=True)
         await ws_manager.broadcast({
             "type": "USER_UPDATED",
             "data": {
@@ -356,6 +366,15 @@ async def verify_yape_payment(
                 "user_name": current_user.name
             }
         })
+        # Notificaciones: al comerciante (plan activo) y a los superadmins (pago recibido)
+        _end = new_period_end.strftime("%d/%m/%Y")
+        await notify([current_user.id], "PLAN_ACTIVATED", f"Plan {p_name} activo",
+                     f"Tu plan está activo hasta el {_end}. Comprobante {inv.invoice_number}.",
+                     {"view": "merchant", "tab": "subscription"}, current_user.store_id)
+        await notify([], "PAYMENT_RECEIVED", f"Pago recibido: {current_user.name}",
+                     f"Plan {p_name} · S/ {float(final_amount):.2f} · vigente hasta el {_end}.",
+                     {"view": "superadmin", "adminTab": "users", "targetId": current_user.id},
+                     current_user.store_id, to_superadmins=True)
         await ws_manager.broadcast({
             "type": "USER_UPDATED",
             "data": {
@@ -407,6 +426,11 @@ async def verify_yape_payment(
 
         remaining = max(0, 3 - current_user.yape_verification_attempts)
         must_whatsapp = remaining <= 0
+        if must_whatsapp:
+            await notify([], "PAYMENT_MANUAL_REVIEW", f"Pago por revisar: {current_user.name}",
+                         f"Agotó los 3 intentos de verificación Yape (S/ {final_amount:.2f}). Revisa su comprobante por WhatsApp.",
+                         {"view": "superadmin", "adminTab": "users", "targetId": current_user.id},
+                         current_user.store_id, to_superadmins=True)
 
         if must_whatsapp:
             user_msg = (

@@ -32,4 +32,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 # 1 worker: el WebSocket, la caché y el límite de intentos viven en memoria.
 # (Con Redis se podrá subir WEB_CONCURRENCY.)
 # --proxy-headers: toma la IP real del visitante desde Nginx (X-Forwarded-For).
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${WEB_CONCURRENCY:-1} --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-*} --no-server-header"]
+# Varios procesos solo si hay Redis (sin Redis los avisos en tiempo real no llegarían a todos)
+CMD ["sh", "-c", "W=${WEB_CONCURRENCY:-1}; if [ -z \"$REDIS_URL\" ] && [ \"$W\" -gt 1 ]; then echo 'Sin REDIS_URL: se usa 1 solo proceso'; W=1; fi; exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers $W --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-*} --no-server-header"]

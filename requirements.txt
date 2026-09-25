@@ -34,6 +34,7 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 python-dotenv==1.2.3
 python-multipart==0.0.32
+redis==8.1.0
 PyYAML==6.0.3
 SQLAlchemy==2.0.52
 starlette==1.6.0
