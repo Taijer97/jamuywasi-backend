@@ -13,6 +13,7 @@ logger = logging.getLogger("jamuywasi.schema")
 # (tabla, columna, definición SQL)
 NEW_COLUMNS = [
     ("orders", "customer_dni", "VARCHAR(12) NULL"),
+    ("stores", "payment_methods", "JSON NULL"),
 ]
 
 

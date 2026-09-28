@@ -129,6 +129,7 @@ class StoreBase(BaseModel):
     pickup_address: Optional[str] = ""
     preferred_payment_method: Optional[str] = "Transferencia Bancaria"
     payment_instructions: Optional[str] = ""
+    payment_methods: Optional[List[Dict[str, Any]]] = []
     whatsapp_message_template: Optional[str] = ""
     theme_color: str = "emerald"
     socials: Optional[Dict[str, str]] = {}
@@ -160,6 +161,7 @@ class StoreUpdate(BaseModel):
     pickup_address: Optional[str] = None
     preferred_payment_method: Optional[str] = None
     payment_instructions: Optional[str] = None
+    payment_methods: Optional[List[Dict[str, Any]]] = None
     whatsapp_message_template: Optional[str] = None
     theme_color: Optional[str] = None
     socials: Optional[Dict[str, str]] = None

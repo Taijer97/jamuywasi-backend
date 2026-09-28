@@ -63,6 +63,7 @@ class Store(Base):
     pickup_address = Column(String(255), default="")
     preferred_payment_method = Column(String(100), default="Transferencia Bancaria")
     payment_instructions = Column(Text, default="")
+    payment_methods = Column(JSON, default=list) # [{"id": "...", "name": "YAPE", "accountNumber": "925763903"}]
     whatsapp_message_template = Column(Text, default="")
     theme_color = Column(String(30), default="emerald")
     socials = Column(JSON, default=dict) # {"instagram": "...", "facebook": "..."}
