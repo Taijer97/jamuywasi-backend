@@ -1,7 +1,7 @@
 from typing import List, Optional
 from datetime import datetime, timezone
 import json
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response
 from app.core.utc_json import mark_utc
@@ -13,6 +13,7 @@ from app.models.all_models import Product, Store, User
 from app.schemas.all_schemas import ProductOut, ProductCreate, ProductUpdate
 from app.core.deps import get_required_user
 from app.core.websocket_manager import ws_manager
+from app.core.view_dedup import register_view
 
 # Productos por tienda según el plan (igual que SAAS_PLANS del frontend)
 PLAN_MAX_PRODUCTS = {"starter": 20, "pro": 150, "business": 9999}
@@ -168,8 +169,16 @@ async def get_product(product_id: str, db: AsyncSession = Depends(get_db)):
     return ProductOut(**p_dict)
 
 @router.post("/{product_id}/visit")
-async def track_product_visit(product_id: str, db: AsyncSession = Depends(get_db)):
-    """Incrementa atómicamente las visitas de un producto sin bloqueo de fila"""
+async def track_product_visit(product_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Incrementa atómicamente las visitas de un producto sin bloqueo de fila.
+
+    Solo cuenta una vez por visitante (IP) cada 12h (ver core/view_dedup.py): evita que
+    recargar la página, o llamar al endpoint directo, infle el contador de "más vistos".
+    """
+    is_new_view = await register_view(request, product_id)
+    if not is_new_view:
+        return {"status": "ok", "counted": False}
+
     stmt = (
         update(Product)
         .where(Product.id == product_id)
@@ -179,7 +188,7 @@ async def track_product_visit(product_id: str, db: AsyncSession = Depends(get_db
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
     await db.commit()
-    return {"status": "ok"}
+    return {"status": "ok", "counted": True}
 
 @router.post("", response_model=ProductOut)
 async def create_product(
