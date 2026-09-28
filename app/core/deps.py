@@ -22,6 +22,14 @@ async def get_current_user(
     stmt = select(User).where(User.id == user_id)
     res = await db.execute(stmt)
     user = res.scalar_one_or_none()
+    if user is None:
+        return None
+    # Revocación inmediata: un token emitido antes de la suspensión (vigente hasta
+    # ACCESS_TOKEN_EXPIRE_MINUTES, hasta 7 días) no debe seguir sirviendo para actuar
+    # como el usuario. pending_approval sí puede seguir usando su sesión (necesita
+    # completar el pago/aprobación desde su propio panel).
+    if user.status == "suspended":
+        return None
     return user
 
 async def get_required_user(
