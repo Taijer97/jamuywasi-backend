@@ -35,7 +35,10 @@ def serialize_user_for_ws(user: User) -> dict:
         "status": user.status,
         "subscription_plan": user.subscription_plan,
         "subscription_status": user.subscription_status or "active",
-        "subscription_period_end": user.subscription_period_end.isoformat() if user.subscription_period_end else None,
+        "subscription_period_end": (
+            None if (user.status == "pending_approval" or user.subscription_status == "pending_approval")
+            else (user.subscription_period_end.isoformat() if user.subscription_period_end else None)
+        ),
         "failed_login_attempts": user.failed_login_attempts or 0,
         "pin_reset_requested": bool(user.pin_reset_requested),
         "pin_reset_requested_at": user.pin_reset_requested_at.isoformat() if user.pin_reset_requested_at else None,
@@ -164,7 +167,7 @@ async def register(data: UserRegister, db: AsyncSession = Depends(get_db)):
         status="pending_approval" if data.role == "merchant" else "active",
         subscription_plan=data.plan or "starter",
         subscription_status="pending_approval" if data.role == "merchant" else "active",
-        subscription_period_end=datetime.now(timezone.utc) + timedelta(days=30),
+        subscription_period_end=None,
     )
     db.add(new_user)
     await db.flush()
@@ -532,9 +535,15 @@ async def get_current_user_profile(
         sub_end = user.subscription_period_end
         if sub_end and sub_end.tzinfo is not None:
             sub_end = sub_end.astimezone(timezone.utc).replace(tzinfo=None)
-        if sub_end and sub_end < now_utc and user.subscription_status not in ["pending_approval", "canceled"]:
-            user.subscription_status = "past_due"
-            needs_commit = True
+        if user.subscription_status not in ["pending_approval", "canceled"]:
+            if sub_end and sub_end < now_utc:
+                if user.subscription_status != "past_due":
+                    user.subscription_status = "past_due"
+                    needs_commit = True
+            elif sub_end and sub_end >= now_utc:
+                if user.subscription_status != "active":
+                    user.subscription_status = "active"
+                    needs_commit = True
 
         if needs_commit:
             await db.commit()
@@ -619,7 +628,34 @@ async def get_all_users(
         )
     stmt = select(User).order_by(User.created_at.desc())
     result = await db.execute(stmt)
-    return result.scalars().all()
+    users = result.scalars().all()
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    needs_commit = False
+    for u in users:
+        if u.status == "pending_approval" or u.subscription_status == "pending_approval":
+            if u.subscription_period_end is not None:
+                u.subscription_period_end = None
+                needs_commit = True
+        elif u.role == "merchant" and u.subscription_status != "canceled":
+            sub_end = u.subscription_period_end
+            if sub_end:
+                if sub_end.tzinfo is not None:
+                    sub_end = sub_end.astimezone(timezone.utc).replace(tzinfo=None)
+                if sub_end < now_utc:
+                    if u.subscription_status != "past_due":
+                        u.subscription_status = "past_due"
+                        needs_commit = True
+                else:
+                    if u.subscription_status != "active":
+                        u.subscription_status = "active"
+                        needs_commit = True
+            else:
+                if u.subscription_status != "past_due":
+                    u.subscription_status = "past_due"
+                    needs_commit = True
+    if needs_commit:
+        await db.commit()
+    return users
 
 @router.put("/users/{user_id}", response_model=UserOut)
 async def admin_update_user(
@@ -687,8 +723,24 @@ async def admin_update_user(
     if data.subscription_period_end is not None:
         target_user.subscription_period_end = data.subscription_period_end
 
-    if data.subscription_status and data.subscription_status in ["active", "trial", "past_due", "canceled", "pending_approval"]:
+    if data.subscription_status and data.subscription_status in ["active", "past_due", "canceled", "pending_approval"]:
         target_user.subscription_status = data.subscription_status
+
+    if target_user.role == "merchant":
+        if target_user.subscription_status == "pending_approval":
+            target_user.subscription_period_end = None
+        elif target_user.subscription_status != "canceled":
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            sub_end = target_user.subscription_period_end
+            if sub_end:
+                if sub_end.tzinfo is not None:
+                    sub_end = sub_end.astimezone(timezone.utc).replace(tzinfo=None)
+                if sub_end < now_utc:
+                    target_user.subscription_status = "past_due"
+                else:
+                    target_user.subscription_status = "active"
+            else:
+                target_user.subscription_status = "past_due"
 
     if data.status and data.status in ["active", "suspended", "pending_approval"]:
         target_user.status = data.status
@@ -822,18 +874,22 @@ async def delete_user(
                 detail="Solo se puede eliminar un usuario si su plan de suscripción está vencido o cancelado."
             )
     
-    # Si el usuario es comerciante, eliminar completamente sus tiendas asociadas y registros vinculados
-    if user.role == "merchant":
-        stores_stmt = select(Store).where(or_(Store.owner_id == user.id, Store.id == user.store_id))
-        user_stores = (await db.execute(stores_stmt)).scalars().all()
-        for s in user_stores:
-            await db.execute(delete(PromotionalBanner).where(PromotionalBanner.store_id == s.id))
-            await db.execute(delete(Notification).where(Notification.store_id == s.id))
-            await db.delete(s)
-            await ws_manager.broadcast({
-                "type": "STORE_DELETED",
-                "data": {"id": s.id}
-            })
+    # Desvincular y eliminar tiendas asociadas y registros vinculados sin conflicto de dependencias circulares
+    stores_stmt = select(Store).where(or_(Store.owner_id == user.id, Store.id == user.store_id))
+    user_stores = (await db.execute(stores_stmt)).scalars().all()
+    user.store_id = None
+    for s in user_stores:
+        s.owner_id = None
+    await db.flush()
+
+    for s in user_stores:
+        await db.execute(delete(PromotionalBanner).where(PromotionalBanner.store_id == s.id))
+        await db.execute(delete(Notification).where(Notification.store_id == s.id))
+        await db.delete(s)
+        await ws_manager.broadcast({
+            "type": "STORE_DELETED",
+            "data": {"id": s.id}
+        })
 
     await db.delete(user)
     await db.commit()

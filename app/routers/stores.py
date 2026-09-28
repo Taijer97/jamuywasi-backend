@@ -264,11 +264,13 @@ async def delete_store(
     # Limpiar notificaciones asociadas a la tienda
     await db.execute(delete(Notification).where(Notification.store_id == store_id))
     
-    # Desvincular usuarios que tengan esta tienda asignada como su store_id
+    # Desvincular usuarios que tengan esta tienda asignada como su store_id y el dueño
+    store.owner_id = None
     user_stmt = select(User).where(User.store_id == store_id)
     linked_users = (await db.execute(user_stmt)).scalars().all()
     for u in linked_users:
         u.store_id = None
+    await db.flush()
 
     await db.delete(store)
     await db.commit()

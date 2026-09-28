@@ -27,17 +27,18 @@ PLAN_PRICING = {
     "business": {"monthly": 50.0, "annual": 500.0}
 }
 
-def calculate_renewal_period_end(current_end: Optional[datetime], days: int) -> tuple[datetime, int]:
+def calculate_renewal_period_end(current_end: Optional[datetime], days: int, is_active_sub: bool = True) -> tuple[datetime, int]:
     """
     Calcula la nueva fecha de fin de vigencia:
-    - Si el usuario tiene vigencia activa en el futuro (current_end > now_utc),
+    - Solo si el usuario tiene una suscripción previamente activa y vigente en el futuro (is_active_sub y current_end > now_utc),
       se respetan los días restantes y se suman los nuevos días (remaining_days + days).
-    - Si la suscripción ya venció o no tiene fecha previa, inicia desde now_utc + days.
+    - Si la cuenta es nueva, está pendiente de aprobación (pending_approval), está vencida o cancelada,
+      la vigencia inicia exactamente hoy: now_utc + days (días acumulados = 0).
     Retorna (new_period_end, remaining_days_accumulated).
     """
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     remaining_days = 0
-    if current_end is not None:
+    if is_active_sub and current_end is not None:
         curr = current_end.replace(tzinfo=None) if current_end.tzinfo else current_end
         if curr > now_utc:
             remaining_seconds = (curr - now_utc).total_seconds()
@@ -120,7 +121,8 @@ async def verify_yape_payment(
     # ¡ACCESO DIRECTO E INMEDIATO SIN VERIFICACIÓN DE PAGO NI PERMISOS!
     if final_amount <= 0:
         days = 365 if data.billing_cycle == "annual" else 30
-        new_period_end, remaining_days = calculate_renewal_period_end(current_user.subscription_period_end, days)
+        is_previously_active = (current_user.status == "active" and current_user.subscription_status == "active")
+        new_period_end, remaining_days = calculate_renewal_period_end(current_user.subscription_period_end, days, is_active_sub=is_previously_active)
 
         current_user.status = "active"
         current_user.subscription_status = "active"
@@ -304,7 +306,8 @@ async def verify_yape_payment(
     if resp.status_code == 200:
         # ¡PAGO VERIFICADO EXITOSAMENTE!
         days = 365 if data.billing_cycle == "annual" else 30
-        new_period_end, remaining_days = calculate_renewal_period_end(current_user.subscription_period_end, days)
+        is_previously_active = (current_user.status == "active" and current_user.subscription_status == "active")
+        new_period_end, remaining_days = calculate_renewal_period_end(current_user.subscription_period_end, days, is_active_sub=is_previously_active)
 
         current_user.status = "active"
         current_user.subscription_status = "active"
