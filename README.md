@@ -168,7 +168,7 @@ backend_as/
 - Tracking de visitas atómico vía SQL `views_count = views_count + 1`.
 
 ### `Order`
-- Estados: `pending_whatsapp` → `confirmed` → `preparing` → `delivered` | `cancelled`.
+- Estados: `pending_whatsapp` → `confirmed` → `preparing` → `ready_to_deliver` → `delivered` | `cancelled`.
 - `items` almacenados como JSON con snapshot del producto (precio, nombre, variante, subtotal).
 - Persistencia automática al confirmar checkout por WhatsApp.
 

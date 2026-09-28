@@ -16,7 +16,7 @@ import secrets
 
 router = APIRouter(prefix="/orders", tags=["Pedidos WhatsApp"])
 
-VALID_ORDER_STATUSES = {"pending_whatsapp", "confirmed", "preparing", "delivered", "cancelled"}
+VALID_ORDER_STATUSES = {"pending_whatsapp", "confirmed", "preparing", "ready_to_deliver", "delivered", "cancelled"}
 ORDER_NUMBER_RE = re.compile(r"^PED-[A-Z0-9]{4,12}$")
 
 
