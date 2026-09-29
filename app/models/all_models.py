@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import uuid
-from sqlalchemy import Column, String, Text, Boolean, Integer, Float, DateTime, ForeignKey, JSON, UniqueConstraint
+from sqlalchemy import Column, String, Text, Boolean, Integer, Float, DateTime, Date, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -199,3 +199,19 @@ class Notification(Base):
     is_read = Column(Boolean, default=False, index=True)
     read_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class VisitStat(Base):
+    """Contador diario de visitas orgánicas (dedupe por IP en core/view_dedup.py).
+
+    Una fila por día para la landing (store_id NULL) y una fila por día por tienda,
+    así el dashboard de SuperAdmin puede graficar tendencia sin guardar cada evento crudo.
+    """
+    __tablename__ = "visit_stats"
+    __table_args__ = (UniqueConstraint("day", "scope", "store_id", name="uq_visit_stats_day_scope_store"),)
+
+    id = Column(String(50), primary_key=True, default=lambda: generate_uuid("visit"))
+    day = Column(Date, nullable=False, index=True)
+    scope = Column(String(20), nullable=False)  # 'landing' | 'store'
+    store_id = Column(String(50), ForeignKey("stores.id", ondelete="CASCADE"), nullable=True, index=True)
+    visits = Column(Integer, default=0)

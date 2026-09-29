@@ -11,7 +11,7 @@ from app.core.utc_json import UTCJSONResponse
 from app.core.config import settings
 from app.core.database import engine, Base
 import app.models # registers all models
-from app.routers import auth, stores, products, orders, banners, uploads, websocket_router, promo_codes, payments, seo, notifications
+from app.routers import auth, stores, products, orders, banners, uploads, websocket_router, promo_codes, payments, seo, notifications, analytics
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("jamuywasi")
@@ -118,6 +118,7 @@ app.include_router(promo_codes.router, prefix=api_prefix)
 app.include_router(payments.router, prefix=api_prefix)
 app.include_router(seo.router, prefix=api_prefix)
 app.include_router(notifications.router, prefix=api_prefix)
+app.include_router(analytics.router, prefix=api_prefix)
 
 @app.get("/")
 async def root():
